@@ -1,0 +1,1721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OrcaWatch — NOAA Passive Acoustic Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & base ──────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --ocean-900: #040d1a;
+    --ocean-800: #071428;
+    --ocean-700: #0a1f3d;
+    --ocean-600: #0d2b55;
+    --ocean-500: #10376d;
+    --ocean-400: #1a5296;
+    --ocean-300: #2471cc;
+    --ocean-200: #5b9de8;
+    --ocean-100: #b8d4f5;
+    --ocean-50:  #e8f2fd;
+
+    --sonar-green: #00e5a0;
+    --sonar-dim:   #00b07a;
+    --sonar-glow:  rgba(0, 229, 160, 0.15);
+
+    --amber: #f5a623;
+    --red:   #e8445a;
+    --white: #f0f4fa;
+    --muted: #6b8ab5;
+
+    --font-mono: 'Space Mono', monospace;
+    --font-body: 'DM Sans', sans-serif;
+
+    --panel-bg:     rgba(7, 20, 40, 0.92);
+    --panel-border: rgba(91, 157, 232, 0.15);
+    --panel-radius: 12px;
+
+    --sidebar-w: 340px;
+    --header-h:  60px;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--ocean-900);
+    color: var(--white);
+    font-family: var(--font-body);
+    font-size: 14px;
+    overflow: hidden;
+  }
+
+  /* ── Sonar background ──────────────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 80%, rgba(16,55,109,0.5) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 80% at 80% 20%, rgba(10,31,61,0.6) 0%, transparent 50%),
+      radial-gradient(circle at 50% 50%, rgba(13,43,85,0.3) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Sonar ring pulse */
+  body::after {
+    content: '';
+    position: fixed;
+    width: 600px; height: 600px;
+    border-radius: 50%;
+    border: 1px solid rgba(0,229,160,0.06);
+    top: 50%; left: 20%;
+    transform: translate(-50%, -50%);
+    animation: sonar-pulse 8s ease-out infinite;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  @keyframes sonar-pulse {
+    0%   { transform: translate(-50%,-50%) scale(0.3); opacity: 0.4; }
+    100% { transform: translate(-50%,-50%) scale(1.8); opacity: 0; }
+  }
+
+  /* ── Layout ────────────────────────────────────────────────────────── */
+  #app { position: relative; z-index: 1; display: flex; flex-direction: column; height: 100vh; }
+
+  header {
+    height: var(--header-h);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--panel-border);
+    background: rgba(4, 13, 26, 0.8);
+    backdrop-filter: blur(12px);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 15px;
+    letter-spacing: 0.04em;
+  }
+
+  .logo-icon {
+    width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    filter: drop-shadow(0 0 8px rgba(0,229,160,0.6));
+    animation: breathe-filter 4s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+
+  @keyframes breathe-filter {
+    0%, 100% { filter: drop-shadow(0 0 6px rgba(0,229,160,0.5)); }
+    50%       { filter: drop-shadow(0 0 16px rgba(0,229,160,0.9)) drop-shadow(0 0 32px rgba(0,229,160,0.3)); }
+  }
+
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 12px rgba(0,229,160,0.4); }
+    50%       { box-shadow: 0 0 24px rgba(0,229,160,0.7), 0 0 48px rgba(0,229,160,0.2); }
+  }
+
+  .logo-text { color: var(--white); }
+  .logo-sub   { color: var(--muted); font-size: 11px; margin-top: 1px; }
+
+  .header-status {
+    display: flex; align-items: center; gap: 16px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+  }
+
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--sonar-green);
+    box-shadow: 0 0 6px var(--sonar-green);
+    display: inline-block;
+    animation: breathe 2s ease-in-out infinite;
+  }
+
+  .main-area {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ────────────────────────────────────────────────────────── */
+  #sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--panel-border);
+    background: var(--panel-bg);
+    backdrop-filter: blur(16px);
+    overflow: hidden;
+  }
+
+  .sidebar-header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--panel-border);
+    flex-shrink: 0;
+  }
+
+  .sidebar-title {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* Breadcrumb */
+  #breadcrumb {
+    display: flex; align-items: center; gap: 4px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--muted);
+    flex-wrap: wrap;
+    min-height: 20px;
+  }
+
+  .crumb {
+    color: var(--ocean-200);
+    cursor: pointer;
+    transition: color 0.15s;
+  }
+  .crumb:hover { color: var(--sonar-green); }
+  .crumb-sep   { color: var(--ocean-600); }
+  .crumb-current { color: var(--white); cursor: default; }
+
+  /* File list */
+  #file-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  #file-list::-webkit-scrollbar { width: 4px; }
+  #file-list::-webkit-scrollbar-track { background: transparent; }
+  #file-list::-webkit-scrollbar-thumb { background: var(--ocean-600); border-radius: 4px; }
+
+  .file-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 20px;
+    cursor: pointer;
+    transition: background 0.12s;
+    border-left: 2px solid transparent;
+  }
+
+  .file-item:hover { background: rgba(91,157,232,0.07); border-left-color: var(--ocean-300); }
+  .file-item.selected { background: rgba(0,229,160,0.06); border-left-color: var(--sonar-green); }
+
+  .file-icon {
+    font-size: 14px;
+    width: 20px; text-align: center;
+    flex-shrink: 0;
+  }
+
+  .file-meta { flex: 1; min-width: 0; }
+  .file-name { color: var(--white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-size { color: var(--muted); font-size: 11px; font-family: var(--font-mono); margin-top: 1px; }
+
+  .file-arrow { color: var(--ocean-500); font-size: 10px; flex-shrink: 0; }
+
+  .empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .loading-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 20px;
+    color: var(--muted);
+    font-size: 12px; font-family: var(--font-mono);
+  }
+
+  .spinner {
+    width: 12px; height: 12px;
+    border: 1.5px solid var(--ocean-500);
+    border-top-color: var(--sonar-green);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Selected file action bar */
+  #action-bar {
+    padding: 14px 20px;
+    border-top: 1px solid var(--panel-border);
+    flex-shrink: 0;
+    display: none;
+  }
+
+  #action-bar.visible { display: block; }
+
+  .selected-file-info {
+    font-size: 12px; color: var(--muted);
+    margin-bottom: 10px;
+    font-family: var(--font-mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .selected-file-info span { color: var(--ocean-200); }
+
+  .btn-run {
+    width: 100%;
+    padding: 11px 0;
+    background: var(--sonar-green);
+    color: var(--ocean-900);
+    border: none;
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+
+  .btn-run:hover   { background: #1affc0; box-shadow: 0 0 20px rgba(0,229,160,0.3); }
+  .btn-run:active  { transform: scale(0.98); }
+  .btn-run:disabled { background: var(--ocean-600); color: var(--muted); cursor: default; box-shadow: none; }
+
+  /* ── Main content ───────────────────────────────────────────────────── */
+  #content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex; align-items: center;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--panel-border);
+    background: rgba(4, 13, 26, 0.5);
+    flex-shrink: 0;
+    gap: 0;
+  }
+
+  .tab {
+    padding: 14px 20px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+
+  .tab:hover  { color: var(--ocean-100); }
+  .tab.active { color: var(--sonar-green); border-bottom-color: var(--sonar-green); }
+
+  .tab-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px;
+    background: var(--ocean-400);
+    border-radius: 8px;
+    font-size: 10px;
+    padding: 0 4px;
+    margin-left: 6px;
+  }
+
+  .tab.active .tab-badge { background: var(--sonar-dim); color: var(--ocean-900); }
+
+  .tab-panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+  .tab-panel.active { display: flex; }
+
+  /* ── Welcome / idle panel ──────────────────────────────────────────── */
+  #welcome {
+    flex: 1;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 16px;
+    text-align: center;
+    padding: 40px;
+  }
+
+  .welcome-icon {
+    font-size: 56px;
+    line-height: 1;
+    filter: drop-shadow(0 0 20px rgba(0,229,160,0.3));
+  }
+
+  .welcome-title {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    color: var(--white);
+  }
+
+  .welcome-sub { color: var(--muted); line-height: 1.6; max-width: 380px; }
+
+  /* ── Results panel ─────────────────────────────────────────────────── */
+  #results-panel {
+    display: flex; flex-direction: column;
+    flex: 1; overflow: hidden;
+  }
+
+  .results-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .results-title { font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+  .results-filename { color: var(--white); margin-top: 2px; font-size: 14px; }
+
+  .btn-download {
+    padding: 7px 14px;
+    background: transparent;
+    border: 1px solid var(--ocean-400);
+    border-radius: 6px;
+    color: var(--ocean-200);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex; align-items: center; gap: 6px;
+  }
+
+  .btn-download:hover { border-color: var(--sonar-green); color: var(--sonar-green); }
+
+  /* Detection stats row */
+  .stats-row {
+    display: flex; gap: 0;
+    border-bottom: 1px solid var(--panel-border);
+    flex-shrink: 0;
+  }
+
+  .stat-box {
+    flex: 1;
+    padding: 14px 20px;
+    border-right: 1px solid var(--panel-border);
+    text-align: center;
+  }
+  .stat-box:last-child { border-right: none; }
+
+  .stat-value {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    color: var(--sonar-green);
+    font-weight: 700;
+  }
+
+  .stat-label { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  /* Timeline */
+  #timeline-container {
+    padding: 20px 24px 12px;
+    flex-shrink: 0;
+  }
+
+  #timeline-canvas {
+    width: 100%;
+    height: 64px;
+    background: rgba(7, 20, 40, 0.8);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    display: block;
+    cursor: crosshair;
+  }
+
+  .timeline-label {
+    display: flex; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+    margin-top: 4px;
+    padding: 0 2px;
+  }
+
+  /* Annotation table */
+  #annotation-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 24px 20px;
+  }
+
+  #annotation-scroll::-webkit-scrollbar { width: 4px; }
+  #annotation-scroll::-webkit-scrollbar-thumb { background: var(--ocean-600); border-radius: 4px; }
+
+  .annotation-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .annotation-table th {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--panel-border);
+    position: sticky; top: 0;
+    background: var(--ocean-900);
+  }
+
+  .annotation-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid rgba(91,157,232,0.06);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ocean-100);
+  }
+
+  .annotation-table tr:hover td { background: rgba(91,157,232,0.04); }
+
+  .label-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
+    background: rgba(0,229,160,0.1);
+    color: var(--sonar-green);
+    border: 1px solid rgba(0,229,160,0.2);
+  }
+
+  /* ── Logs panel ─────────────────────────────────────────────────────── */
+  #logs-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #log-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 24px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--ocean-100);
+  }
+
+  #log-output::-webkit-scrollbar { width: 4px; }
+  #log-output::-webkit-scrollbar-thumb { background: var(--ocean-600); border-radius: 4px; }
+
+  .log-line { display: block; }
+  .log-line.success { color: var(--sonar-green); }
+  .log-line.error   { color: var(--red); }
+  .log-line.warn    { color: var(--amber); }
+  .log-line.info    { color: var(--ocean-200); }
+
+  .log-placeholder {
+    color: var(--muted);
+    text-align: center;
+    padding: 60px 20px;
+    line-height: 1.7;
+  }
+
+  /* ── Jobs panel ─────────────────────────────────────────────────────── */
+  #jobs-panel {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+  }
+
+  #jobs-panel::-webkit-scrollbar { width: 4px; }
+  #jobs-panel::-webkit-scrollbar-thumb { background: var(--ocean-600); border-radius: 4px; }
+
+  .job-card {
+    background: rgba(7,20,40,0.7);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    display: flex; align-items: center; gap: 12px;
+  }
+
+  .job-card:hover { border-color: var(--ocean-300); background: rgba(10,31,61,0.7); }
+  .job-card.active-job { border-color: var(--sonar-green); }
+
+  .job-status-icon {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0;
+  }
+
+  .job-status-icon.done      { background: rgba(0,229,160,0.15); }
+  .job-status-icon.running   { background: rgba(245,166,35,0.15); }
+  .job-status-icon.queued    { background: rgba(91,157,232,0.15); }
+  .job-status-icon.failed    { background: rgba(232,68,90,0.15); }
+
+  .job-info { flex: 1; min-width: 0; }
+  .job-path { color: var(--white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; }
+  .job-meta { color: var(--muted); font-family: var(--font-mono); font-size: 10px; margin-top: 3px; }
+
+  .job-count {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    color: var(--sonar-green);
+    font-weight: 700;
+    flex-shrink: 0;
+    text-align: right;
+  }
+
+  .job-count-label { font-size: 10px; color: var(--muted); font-weight: 400; }
+
+  /* ── Progress bar ───────────────────────────────────────────────────── */
+  #progress-wrap {
+    padding: 12px 24px;
+    border-top: 1px solid var(--panel-border);
+    flex-shrink: 0;
+    display: none;
+  }
+
+  #progress-wrap.visible { display: block; }
+
+  .progress-label {
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+    margin-bottom: 6px; display: flex; justify-content: space-between;
+  }
+
+  .progress-bar-bg {
+    height: 3px; background: var(--ocean-700); border-radius: 2px; overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%; background: var(--sonar-green);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    box-shadow: 0 0 8px rgba(0,229,160,0.5);
+  }
+
+  /* ── Review cards ──────────────────────────────────────────────────── */
+  .review-card {
+    background: rgba(7,20,40,0.7);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    transition: border-color 0.15s;
+    flex-shrink: 0;
+  }
+  .review-card.confirmed { border-color: var(--sonar-green); background: rgba(0,229,160,0.04); }
+  .review-card.rejected  { border-color: var(--red);         background: rgba(232,68,90,0.04); }
+  .review-card.unsure    { border-color: var(--amber);       background: rgba(245,166,35,0.04); }
+
+  .review-card-header {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 10px;
+  }
+  .review-index {
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+    width: 28px; text-align: right; flex-shrink: 0;
+  }
+  .review-label { flex: 1; }
+  .review-label-pill {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 700;
+    background: rgba(0,229,160,0.1); color: var(--sonar-green);
+    border: 1px solid rgba(0,229,160,0.2);
+  }
+  .review-time {
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+  }
+
+  .review-audio-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+  }
+  .btn-play {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--ocean-600); border: none;
+    color: var(--white); font-size: 13px;
+    cursor: pointer; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s;
+  }
+  .btn-play:hover { background: var(--ocean-400); }
+  .btn-play.playing { background: var(--sonar-dim); }
+
+  .waveform-bar {
+    flex: 1; height: 32px;
+    background: rgba(91,157,232,0.06);
+    border-radius: 4px; overflow: hidden;
+    position: relative; cursor: pointer;
+  }
+  .waveform-progress {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: rgba(0,229,160,0.15);
+    transition: width 0.1s linear;
+    pointer-events: none;
+  }
+  .waveform-bars {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; gap: 1px; padding: 0 4px;
+  }
+  .waveform-bar-item {
+    flex: 1; background: var(--ocean-300); border-radius: 1px;
+    opacity: 0.6;
+  }
+
+  .review-verdict-row {
+    display: flex; gap: 8px;
+  }
+  .btn-verdict {
+    flex: 1; padding: 7px 0;
+    border-radius: 6px; border: 1px solid;
+    font-family: var(--font-mono); font-size: 11px;
+    cursor: pointer; transition: all 0.15s;
+    background: transparent;
+  }
+  .btn-confirm { border-color: var(--sonar-dim); color: var(--sonar-green); }
+  .btn-confirm:hover, .btn-confirm.active { background: rgba(0,229,160,0.15); border-color: var(--sonar-green); }
+  .btn-reject  { border-color: rgba(232,68,90,0.4); color: var(--red); }
+  .btn-reject:hover, .btn-reject.active  { background: rgba(232,68,90,0.15); border-color: var(--red); }
+  .btn-unsure  { border-color: rgba(245,166,35,0.4); color: var(--amber); }
+  .btn-unsure:hover, .btn-unsure.active  { background: rgba(245,166,35,0.15); border-color: var(--amber); }
+
+  /* ── Leaflet popup dark theme ──────────────────────────────────────── */
+  .leaflet-popup-content-wrapper {
+    background: #071428 !important;
+    border: 1px solid rgba(91,157,232,0.2) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important;
+    color: #f0f4fa !important;
+    padding: 0 !important;
+  }
+  .leaflet-popup-content { margin: 14px 16px !important; }
+  .leaflet-popup-tip-container { display: none !important; }
+  .leaflet-popup-close-button {
+    color: #6b8ab5 !important;
+    font-size: 18px !important;
+    top: 6px !important; right: 8px !important;
+  }
+  .leaflet-popup-close-button:hover { color: #f0f4fa !important; }
+  .leaflet-control-zoom a {
+    background: #071428 !important;
+    color: #5b9de8 !important;
+    border-color: rgba(91,157,232,0.2) !important;
+  }
+  .leaflet-control-zoom a:hover { background: #0d2b55 !important; }
+  .leaflet-control-attribution {
+    background: rgba(4,13,26,0.7) !important;
+    color: #6b8ab5 !important;
+    font-size: 10px !important;
+  }
+  .leaflet-control-attribution a { color: #5b9de8 !important; }
+
+  /* ── Scrollbar fix ──────────────────────────────────────────────────── */
+  * { scrollbar-width: thin; scrollbar-color: var(--ocean-600) transparent; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Killer whale SVG illustration -->
+          <!-- Body -->
+          <ellipse cx="19" cy="23" rx="13" ry="8" fill="#00e5a0"/>
+          <!-- Black back/top of body -->
+          <path d="M6 23 Q8 14 19 15 Q30 14 32 23 Q28 18 19 18 Q10 18 6 23Z" fill="#071428"/>
+          <!-- White eye patch -->
+          <ellipse cx="28" cy="19" rx="3.5" ry="2.5" fill="white" transform="rotate(-10 28 19)"/>
+          <!-- Eye -->
+          <circle cx="28.5" cy="19" r="1" fill="#071428"/>
+          <!-- Dorsal fin -->
+          <path d="M20 15 L22 6 L25 14" fill="#071428" stroke="#071428" stroke-width="0.5" stroke-linejoin="round"/>
+          <!-- Pectoral fin -->
+          <path d="M11 24 Q7 28 9 32 Q13 28 14 25Z" fill="#071428"/>
+          <!-- Tail fluke -->
+          <path d="M6 23 Q2 19 4 16 Q6 20 7 21" fill="#071428"/>
+          <path d="M6 23 Q1 25 3 29 Q6 26 7 24" fill="#071428"/>
+          <!-- White belly -->
+          <ellipse cx="19" cy="26" rx="9" ry="4" fill="white" opacity="0.9"/>
+          <!-- Mouth curve -->
+          <path d="M24 24 Q27 26 29 24" fill="none" stroke="#071428" stroke-width="0.8" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div>
+        <div class="logo-text">ORCAWATCH</div>
+        <div class="logo-sub">NOAA Passive Acoustic Monitor</div>
+      </div>
+    </div>
+    <div class="header-status">
+      <span class="status-dot"></span>
+      <span id="header-status-text">Connecting to NOAA GCS…</span>
+    </div>
+  </header>
+
+  <div class="main-area">
+
+    <!-- Sidebar: file browser -->
+    <div id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">📡 GCS File Browser</div>
+        <div id="breadcrumb">
+          <span class="crumb" onclick="browsePrefix('')">noaa-passive-bioacoustic</span>
+        </div>
+      </div>
+
+      <div id="file-list">
+        <div class="empty-state">Loading stations…</div>
+      </div>
+
+      <div id="action-bar">
+        <div class="selected-file-info">Selected: <span id="selected-name">—</span></div>
+        <button class="btn-run" id="btn-run" onclick="runPrediction()">
+          <span>▶</span> Run orcAI Detection
+        </button>
+      </div>
+    </div>
+
+    <!-- Main content -->
+    <div id="content">
+      <div class="tab-bar">
+        <div class="tab active" onclick="switchTab('results')" id="tab-results">Detections</div>
+        <div class="tab" onclick="switchTab('logs')" id="tab-logs">Live Logs</div>
+        <div class="tab" onclick="switchTab('jobs')" id="tab-jobs">
+          All Jobs <span class="tab-badge" id="jobs-badge">0</span>
+        </div>
+        <div class="tab" onclick="switchTab('review')" id="tab-review">
+          Review <span class="tab-badge" id="review-badge">0</span>
+        </div>
+        <div class="tab" onclick="switchTab('map'); initMap();" id="tab-map">Map</div>
+      </div>
+
+      <!-- Results tab -->
+      <div class="tab-panel active" id="panel-results">
+        <div id="welcome">
+          <div class="welcome-icon">🐋</div>
+          <div class="welcome-title">Passive Acoustic Monitor</div>
+          <p class="welcome-sub">Browse the NOAA GCS bucket on the left, select a WAV or FLAC file, then click <strong>Run orcAI Detection</strong> to identify killer whale calls, whistles, and acoustic signals.</p>
+        </div>
+        <div id="results-panel" style="display:none; flex:1; flex-direction:column; overflow:hidden;">
+          <div class="results-header">
+            <div>
+              <div class="results-title">Detection Results</div>
+              <div class="results-filename" id="results-filename">—</div>
+            </div>
+            <button class="btn-download" id="btn-download" onclick="downloadAnnotations()">
+              ↓ Audacity .txt
+            </button>
+          </div>
+          <div class="stats-row">
+            <div class="stat-box">
+              <div class="stat-value" id="stat-total">—</div>
+              <div class="stat-label">Total Detections</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="stat-duration">—</div>
+              <div class="stat-label">File Duration</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="stat-types">—</div>
+              <div class="stat-label">Call Types</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="stat-avg">—</div>
+              <div class="stat-label">Avg Duration (s)</div>
+            </div>
+          </div>
+          <div id="timeline-container">
+            <canvas id="timeline-canvas"></canvas>
+            <div class="timeline-label">
+              <span id="tl-start">0:00</span>
+              <span style="color:var(--sonar-green); font-size:10px;" id="tl-title">Detection timeline</span>
+              <span id="tl-end">—</span>
+            </div>
+          </div>
+          <div id="annotation-scroll">
+            <table class="annotation-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Duration</th>
+                  <th>Call Type</th>
+                </tr>
+              </thead>
+              <tbody id="annotation-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logs tab -->
+      <div class="tab-panel" id="panel-logs">
+        <div id="logs-panel">
+          <div id="log-output">
+            <div class="log-placeholder">No active job yet.<br>Select a file and run orcAI to see live logs here.</div>
+          </div>
+          <div id="progress-wrap">
+            <div class="progress-label">
+              <span id="progress-label-text">Running…</span>
+              <span id="progress-pct"></span>
+            </div>
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Jobs tab -->
+      <div class="tab-panel" id="panel-jobs">
+        <div id="jobs-panel">
+          <div class="log-placeholder">No jobs run yet.</div>
+        </div>
+      </div>
+
+      <!-- Review tab -->
+      <div class="tab-panel" id="panel-review">
+        <div id="review-panel" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+          <div class="results-header" style="flex-shrink:0;">
+            <div>
+              <div class="results-title">Expert Review</div>
+              <div class="results-filename" id="review-filename">—</div>
+            </div>
+            <button class="btn-download" id="btn-download-confirmed" onclick="downloadConfirmed()" style="display:none;">
+              ↓ Confirmed .txt
+            </button>
+          </div>
+          <div class="stats-row" style="flex-shrink:0;">
+            <div class="stat-box">
+              <div class="stat-value" id="rv-total">—</div>
+              <div class="stat-label">Total</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="rv-confirmed" style="color:var(--sonar-green)">0</div>
+              <div class="stat-label">Confirmed ✓</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="rv-rejected" style="color:var(--red)">0</div>
+              <div class="stat-label">Rejected ✗</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-value" id="rv-unsure" style="color:var(--amber)">0</div>
+              <div class="stat-label">Unsure ?</div>
+            </div>
+          </div>
+          <div id="review-cards" style="flex:1;overflow-y:auto;padding:16px 24px;display:flex;flex-direction:column;gap:10px;">
+            <div class="log-placeholder">Run a detection first, then come here to review each snippet.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Map tab -->
+      <div class="tab-panel" id="panel-map">
+        <div style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+          <div class="results-header" style="flex-shrink:0;">
+            <div>
+              <div class="results-title">Hydrophone Deployment Map</div>
+              <div class="results-filename">Completed detection jobs · click a marker for details</div>
+            </div>
+          </div>
+          <div style="flex:1;position:relative;overflow:hidden;">
+            <div id="map-container" style="width:100%;height:100%;"></div>
+            <!-- No-coords warning panel -->
+            <div id="map-coord-form" style="display:none;position:absolute;top:12px;right:12px;z-index:1000;
+              background:rgba(7,20,40,0.95);border:1px solid var(--panel-border);border-radius:10px;
+              padding:16px;min-width:260px;backdrop-filter:blur(12px);">
+              <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;">
+                Unknown station coordinates
+              </div>
+              <div style="font-size:13px;color:var(--white);margin-bottom:12px;" id="coord-form-station">—</div>
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                <input id="coord-lat" type="number" step="0.0001" placeholder="Latitude"
+                  style="background:var(--ocean-700);border:1px solid var(--panel-border);border-radius:6px;
+                  padding:7px 10px;color:var(--white);font-family:var(--font-mono);font-size:12px;width:100%;">
+                <input id="coord-lon" type="number" step="0.0001" placeholder="Longitude"
+                  style="background:var(--ocean-700);border:1px solid var(--panel-border);border-radius:6px;
+                  padding:7px 10px;color:var(--white);font-family:var(--font-mono);font-size:12px;width:100%;">
+                <button onclick="saveStationCoords()"
+                  style="background:var(--sonar-green);color:var(--ocean-900);border:none;border-radius:6px;
+                  padding:8px;font-family:var(--font-mono);font-size:12px;font-weight:700;cursor:pointer;">
+                  Save &amp; Pin
+                </button>
+                <button onclick="document.getElementById('map-coord-form').style.display='none'"
+                  style="background:transparent;color:var(--muted);border:1px solid var(--panel-border);
+                  border-radius:6px;padding:6px;font-family:var(--font-mono);font-size:11px;cursor:pointer;">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main-area -->
+</div><!-- /app -->
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const API = window.location.origin;  // same host; FastAPI serves both
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let currentPrefix    = '';
+let selectedFile     = null;   // { name, path, size_mb }
+let currentJobId     = null;
+let allJobs          = {};
+let currentWs        = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(async () => {
+  await browsePrefix('');
+  setStatus('Connected to NOAA GCS');
+  pollJobs();
+})();
+
+// ── GCS Browser ───────────────────────────────────────────────────────────────
+async function browsePrefix(prefix) {
+  currentPrefix = prefix;
+  renderBreadcrumb(prefix);
+  renderLoading();
+
+  try {
+    const res = await fetch(`${API}/api/gcs/browse?prefix=${encodeURIComponent(prefix)}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    renderFileList(data.folders, data.files);
+  } catch (e) {
+    document.getElementById('file-list').innerHTML =
+      `<div class="empty-state">⚠ Could not load GCS contents.<br><small>${e.message}</small></div>`;
+  }
+}
+
+function renderLoading() {
+  document.getElementById('file-list').innerHTML =
+    `<div class="loading-row"><div class="spinner"></div> Loading…</div>`;
+}
+
+function renderBreadcrumb(prefix) {
+  const parts = prefix ? prefix.replace(/\/$/, '').split('/') : [];
+  let html = `<span class="crumb" onclick="browsePrefix('')">noaa-passive-bioacoustic</span>`;
+  let built = '';
+  parts.forEach((p, i) => {
+    built += p + '/';
+    const captured = built;
+    if (i < parts.length - 1) {
+      html += `<span class="crumb-sep">/</span><span class="crumb" onclick="browsePrefix('${captured}')">${p}</span>`;
+    } else {
+      html += `<span class="crumb-sep">/</span><span class="crumb-current">${p}</span>`;
+    }
+  });
+  document.getElementById('breadcrumb').innerHTML = html;
+}
+
+function renderFileList(folders, files) {
+  const el = document.getElementById('file-list');
+  if (!folders.length && !files.length) {
+    el.innerHTML = `<div class="empty-state">No audio files found in this directory.</div>`;
+    return;
+  }
+
+  let html = '';
+
+  folders.forEach(f => {
+    html += `
+      <div class="file-item" onclick="browsePrefix('${f.prefix}')">
+        <span class="file-icon">📁</span>
+        <div class="file-meta">
+          <div class="file-name">${f.name}</div>
+        </div>
+        <span class="file-arrow">›</span>
+      </div>`;
+  });
+
+  files.forEach(f => {
+    const sizeStr = f.size_mb ? `${f.size_mb} MB` : '';
+    const extIcon = f.extension === 'flac' ? '🎵' : '🔊';
+    // Store file data on a global map keyed by encoded path
+    const fileKey = btoa(unescape(encodeURIComponent(f.path))).replace(/=/g,'');
+    window._fileMap = window._fileMap || {};
+    window._fileMap[fileKey] = f;
+    html += `
+      <div class="file-item" id="file-${fileKey}"
+           onclick="selectFile('${fileKey}')">
+        <span class="file-icon">${extIcon}</span>
+        <div class="file-meta">
+          <div class="file-name">${f.name}</div>
+          <div class="file-size">${sizeStr} · ${f.extension?.toUpperCase()}</div>
+        </div>
+      </div>`;
+  });
+
+  el.innerHTML = html;
+}
+
+function selectFile(fileKey) {
+  const f = (window._fileMap || {})[fileKey];
+  if (!f) return;
+  selectedFile = f;
+
+  // Highlight row
+  document.querySelectorAll('.file-item').forEach(el => el.classList.remove('selected'));
+  const id = 'file-' + btoa(f.path).replace(/=/g,'');
+  const el = document.getElementById(id);
+  if (el) el.classList.add('selected');
+
+  // Show action bar
+  document.getElementById('selected-name').textContent = f.name;
+  document.getElementById('action-bar').classList.add('visible');
+  document.getElementById('btn-run').disabled = false;
+}
+
+// ── Run prediction ────────────────────────────────────────────────────────────
+async function runPrediction() {
+  if (!selectedFile) return;
+
+  document.getElementById('btn-run').disabled = true;
+  document.getElementById('btn-run').textContent = '⏳ Submitting…';
+
+  try {
+    const res = await fetch(`${API}/api/jobs/predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gcs_path: selectedFile.path }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const { job_id } = await res.json();
+
+    currentJobId = job_id;
+    allJobs[job_id] = { job_id, gcs_path: selectedFile.path, status: 'queued' };
+
+    clearLogs();
+    switchTab('logs');
+    startLogStream(job_id);
+    showProgress('Queued…', 5);
+
+  } catch (e) {
+    alert(`Failed to start job: ${e.message}`);
+    document.getElementById('btn-run').disabled = false;
+    document.getElementById('btn-run').innerHTML = '<span>▶</span> Run orcAI Detection';
+  }
+}
+
+// ── WebSocket log streaming ───────────────────────────────────────────────────
+function startLogStream(jobId) {
+  if (currentWs) currentWs.close();
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/jobs/${jobId}/logs`);
+  currentWs = ws;
+
+  let progress = 10;
+
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+
+    if (msg.log) {
+      appendLog(msg.log);
+      // Rough progress heuristic from log content
+      if (msg.log.includes('Downloaded'))        progress = 30;
+      if (msg.log.includes('Running orcai'))     progress = 40;
+      if (msg.log.includes('Filtering'))         progress = 85;
+      if (msg.log.includes('Final annotations')) progress = 92;
+      showProgress('Processing…', progress);
+    }
+
+    if (msg.done) {
+      showProgress('Complete', 100);
+      ws.close();
+      if (msg.status === 'done') {
+        setTimeout(() => loadResults(jobId), 600);
+      }
+      document.getElementById('btn-run').innerHTML = '<span>▶</span> Run orcAI Detection';
+      document.getElementById('btn-run').disabled = false;
+      hideProgress();
+    }
+
+    if (msg.error) {
+      appendLog(`❌ ${msg.error}`, 'error');
+      hideProgress();
+    }
+  };
+
+  ws.onerror = () => appendLog('WebSocket connection error', 'error');
+}
+
+// ── Results ───────────────────────────────────────────────────────────────────
+async function loadResults(jobId) {
+  try {
+    const [jobRes, annRes] = await Promise.all([
+      fetch(`${API}/api/jobs/${jobId}`),
+      fetch(`${API}/api/jobs/${jobId}/annotations`),
+    ]);
+    const job = await jobRes.json();
+    const { annotations } = await annRes.json();
+
+    switchTab('results');
+    renderResults(job, annotations);
+    buildReviewTab(jobId, annotations);
+    refreshJobsList();
+    if (_mapInited) refreshMapMarkers();
+  } catch (e) {
+    appendLog(`Could not load results: ${e.message}`, 'error');
+  }
+}
+
+function renderResults(job, annotations) {
+  document.getElementById('welcome').style.display = 'none';
+  const panel = document.getElementById('results-panel');
+  panel.style.display = 'flex';
+
+  const fname = job.gcs_path.split('/').pop();
+  document.getElementById('results-filename').textContent = fname;
+
+  // Stats
+  const total = annotations.length;
+  const types = [...new Set(annotations.map(a => a.label))].length;
+  const avgDur = total
+    ? (annotations.reduce((s, a) => s + a.duration, 0) / total).toFixed(2)
+    : '—';
+  const maxEnd = total ? Math.max(...annotations.map(a => a.end)) : 0;
+
+  document.getElementById('stat-total').textContent  = total;
+  document.getElementById('stat-types').textContent  = types;
+  document.getElementById('stat-avg').textContent    = total ? avgDur : '—';
+  document.getElementById('stat-duration').textContent = maxEnd ? formatTime(maxEnd) : '—';
+
+  // Timeline
+  drawTimeline(annotations, maxEnd);
+
+  // Table
+  const body = document.getElementById('annotation-body');
+  if (!total) {
+    body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:30px">No detections found</td></tr>';
+    return;
+  }
+
+  body.innerHTML = annotations.map((a, i) => `
+    <tr>
+      <td style="color:var(--muted)">${i + 1}</td>
+      <td>${formatTime(a.start)}</td>
+      <td>${formatTime(a.end)}</td>
+      <td>${a.duration.toFixed(2)}s</td>
+      <td><span class="label-pill">${a.label}</span></td>
+    </tr>
+  `).join('');
+
+  // Store job_id for download
+  document.getElementById('btn-download').dataset.jobId = job.job_id;
+}
+
+function drawTimeline(annotations, totalDuration) {
+  const canvas = document.getElementById('timeline-canvas');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width  = canvas.offsetWidth  * dpr;
+  canvas.height = canvas.offsetHeight * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  const dur = totalDuration || 1;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Background grid lines
+  ctx.strokeStyle = 'rgba(91,157,232,0.08)';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 10; i++) {
+    const x = (i / 10) * W;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+
+  // Detection bars
+  const colorMap = {};
+  const palette  = ['#00e5a0','#5b9de8','#f5a623','#e8445a','#b06fe8','#5be8c8'];
+  let ci = 0;
+
+  annotations.forEach(a => {
+    if (!colorMap[a.label]) colorMap[a.label] = palette[ci++ % palette.length];
+    const x  = (a.start / dur) * W;
+    const w  = Math.max(2, (a.duration / dur) * W);
+    const col = colorMap[a.label];
+
+    ctx.fillStyle = col + '40';
+    ctx.fillRect(x, 4, w, H - 8);
+
+    ctx.fillStyle = col;
+    ctx.fillRect(x, 4, Math.min(w, 2), H - 8);
+  });
+
+  // Time labels
+  document.getElementById('tl-start').textContent = '0:00';
+  document.getElementById('tl-end').textContent   = formatTime(dur);
+  document.getElementById('tl-title').textContent = `${annotations.length} detection${annotations.length !== 1 ? 's' : ''}`;
+}
+
+async function downloadAnnotations() {
+  const btn = document.getElementById('btn-download');
+  const jobId = btn.dataset.jobId || currentJobId;
+  if (!jobId) return;
+  window.open(`${API}/api/jobs/${jobId}/download`, '_blank');
+}
+
+// ── Job polling ───────────────────────────────────────────────────────────────
+async function pollJobs() {
+  try {
+    const res = await fetch(`${API}/api/jobs`);
+    const { jobs } = await res.json();
+    jobs.forEach(j => { allJobs[j.job_id] = j; });
+    refreshJobsList();
+  } catch (_) {}
+  setTimeout(pollJobs, 5000);
+}
+
+function refreshJobsList() {
+  const panel    = document.getElementById('jobs-panel');
+  const jobsList = Object.values(allJobs).sort((a, b) =>
+    (b.created_at || '').localeCompare(a.created_at || ''));
+
+  document.getElementById('jobs-badge').textContent = jobsList.length;
+
+  if (!jobsList.length) {
+    panel.innerHTML = '<div class="log-placeholder">No jobs run yet.</div>';
+    return;
+  }
+
+  panel.innerHTML = jobsList.map(j => {
+    const icons   = { done: '✅', running: '⚡', queued: '🕐', failed: '❌' };
+    const fname   = j.gcs_path ? j.gcs_path.split('/').pop() : '—';
+    const count   = j.detection_count != null ? j.detection_count : '—';
+    const countLbl = j.status === 'done' ? 'detections' : j.status;
+
+    return `
+      <div class="job-card ${j.job_id === currentJobId ? 'active-job' : ''}"
+           onclick="openJob('${j.job_id}')">
+        <div class="job-status-icon ${j.status}">${icons[j.status] || '?'}</div>
+        <div class="job-info">
+          <div class="job-path">${fname}</div>
+          <div class="job-meta">${j.job_id} · ${(j.created_at||'').slice(0,19).replace('T',' ')} UTC</div>
+        </div>
+        <div class="job-count">
+          ${count}
+          <div class="job-count-label">${countLbl}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function openJob(jobId) {
+  currentJobId = jobId;
+  const job = allJobs[jobId];
+  if (!job) return;
+  if (job.status === 'done') {
+    await loadResults(jobId);
+  } else if (job.status === 'running') {
+    switchTab('logs');
+    startLogStream(jobId);
+  }
+}
+
+// ── Logs helpers ──────────────────────────────────────────────────────────────
+function clearLogs() {
+  document.getElementById('log-output').innerHTML = '';
+}
+
+function appendLog(line, cls = '') {
+  const el = document.getElementById('log-output');
+  const span = document.createElement('span');
+  span.className = 'log-line ' + (cls || classifyLog(line));
+  span.textContent = line;
+  el.appendChild(span);
+  el.appendChild(document.createTextNode('\n'));
+  el.scrollTop = el.scrollHeight;
+}
+
+function classifyLog(line) {
+  if (line.includes('✅') || line.includes('✓')) return 'success';
+  if (line.includes('❌') || line.includes('Error'))  return 'error';
+  if (line.includes('⬇') || line.includes('🔬') || line.includes('🔎')) return 'info';
+  return '';
+}
+
+// ── Progress bar ──────────────────────────────────────────────────────────────
+function showProgress(label, pct) {
+  document.getElementById('progress-wrap').classList.add('visible');
+  document.getElementById('progress-label-text').textContent = label;
+  document.getElementById('progress-pct').textContent = pct + '%';
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+function hideProgress() {
+  setTimeout(() => {
+    document.getElementById('progress-wrap').classList.remove('visible');
+    document.getElementById('progress-bar').style.width = '0%';
+  }, 1500);
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function formatTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = (sec % 60).toFixed(1).padStart(4, '0');
+  return `${m}:${s}`;
+}
+
+function setStatus(msg) {
+  document.getElementById('header-status-text').textContent = msg;
+}
+
+// ── Review tab ────────────────────────────────────────────────────────────────
+let reviewJobId    = null;
+let reviewVerdicts = {};   // index -> 'confirmed' | 'rejected' | 'unsure'
+let activeAudio    = null; // currently playing HTMLAudioElement
+
+function buildReviewTab(jobId, annotations) {
+  reviewJobId    = jobId;
+  reviewVerdicts = {};
+  activeAudio    = null;
+
+  document.getElementById('review-filename').textContent =
+    (currentJobId && allJobs[currentJobId]) ? allJobs[currentJobId].gcs_path.split('/').pop() : '—';
+  document.getElementById('rv-total').textContent = annotations.length;
+  updateReviewStats();
+
+  const container = document.getElementById('review-cards');
+  if (!annotations.length) {
+    container.innerHTML = '<div class="log-placeholder">No detections to review.</div>';
+    return;
+  }
+
+  container.innerHTML = annotations.map((ann, i) => `
+    <div class="review-card" id="rv-card-${i}">
+      <div class="review-card-header">
+        <span class="review-index">#${i + 1}</span>
+        <span class="review-label"><span class="review-label-pill">${ann.label}</span></span>
+        <span class="review-time">${formatTime(ann.start)} – ${formatTime(ann.end)} &nbsp;(${ann.duration.toFixed(2)}s)</span>
+      </div>
+      <div class="review-audio-row">
+        <button class="btn-play" id="rv-play-${i}" onclick="toggleSnippet(${i})" title="Play snippet">▶</button>
+        <div class="waveform-bar" id="rv-wave-${i}" onclick="seekSnippet(event, ${i})">
+          <div class="waveform-progress" id="rv-prog-${i}" style="width:0%"></div>
+          <div class="waveform-bars">${generateFakeWaveform()}</div>
+        </div>
+      </div>
+      <div class="review-verdict-row">
+        <button class="btn-verdict btn-confirm" id="rv-confirm-${i}" onclick="setVerdict(${i}, 'confirmed')">✓ Confirm</button>
+        <button class="btn-verdict btn-unsure"  id="rv-unsure-${i}"  onclick="setVerdict(${i}, 'unsure')">? Unsure</button>
+        <button class="btn-verdict btn-reject"  id="rv-reject-${i}"  onclick="setVerdict(${i}, 'rejected')">✗ Reject</button>
+      </div>
+    </div>
+  `).join('');
+
+  document.getElementById('review-badge').textContent = annotations.length;
+}
+
+function generateFakeWaveform() {
+  // Decorative waveform bars — heights are random but seeded-looking
+  return Array.from({length: 40}, (_, i) => {
+    const h = 20 + Math.abs(Math.sin(i * 1.7 + i * i * 0.05)) * 70;
+    return `<div class="waveform-bar-item" style="height:${h.toFixed(0)}%"></div>`;
+  }).join('');
+}
+
+function setVerdict(index, verdict) {
+  // Deselect previous
+  const prev = reviewVerdicts[index];
+  if (prev) {
+    document.getElementById(`rv-${prev}-${index}`)?.classList.remove('active');
+    document.getElementById(`rv-card-${index}`)?.classList.remove(prev);
+  }
+
+  // Toggle off if same button
+  if (prev === verdict) {
+    delete reviewVerdicts[index];
+  } else {
+    reviewVerdicts[index] = verdict;
+    document.getElementById(`rv-${verdict}-${index}`)?.classList.add('active');
+    document.getElementById(`rv-card-${index}`)?.classList.add(verdict);
+  }
+
+  updateReviewStats();
+
+  const confirmed = Object.values(reviewVerdicts).filter(v => v === 'confirmed').length;
+  document.getElementById('btn-download-confirmed').style.display = confirmed > 0 ? 'flex' : 'none';
+}
+
+function updateReviewStats() {
+  const vals = Object.values(reviewVerdicts);
+  document.getElementById('rv-confirmed').textContent = vals.filter(v => v === 'confirmed').length;
+  document.getElementById('rv-rejected').textContent  = vals.filter(v => v === 'rejected').length;
+  document.getElementById('rv-unsure').textContent    = vals.filter(v => v === 'unsure').length;
+}
+
+function toggleSnippet(index) {
+  const btn = document.getElementById(`rv-play-${index}`);
+  const prog = document.getElementById(`rv-prog-${index}`);
+
+  // Stop any currently playing audio
+  if (activeAudio && activeAudio._index !== index) {
+    activeAudio.pause();
+    const prevBtn = document.getElementById(`rv-play-${activeAudio._index}`);
+    if (prevBtn) { prevBtn.textContent = '▶'; prevBtn.classList.remove('playing'); }
+    const prevProg = document.getElementById(`rv-prog-${activeAudio._index}`);
+    if (prevProg) prevProg.style.width = '0%';
+    activeAudio = null;
+  }
+
+  if (activeAudio && activeAudio._index === index) {
+    if (activeAudio.paused) {
+      activeAudio.play();
+      btn.textContent = '⏸'; btn.classList.add('playing');
+    } else {
+      activeAudio.pause();
+      btn.textContent = '▶'; btn.classList.remove('playing');
+    }
+    return;
+  }
+
+  // Load fresh snippet
+  btn.textContent = '…'; btn.disabled = true;
+  const url = `${API}/api/jobs/${reviewJobId}/snippet/${index}?padding=2.0`;
+  const audio = new Audio(url);
+  audio._index = index;
+  activeAudio = audio;
+
+  audio.addEventListener('canplay', () => {
+    btn.disabled = false;
+    btn.textContent = '⏸'; btn.classList.add('playing');
+    audio.play();
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    if (audio.duration) {
+      prog.style.width = ((audio.currentTime / audio.duration) * 100) + '%';
+    }
+  });
+
+  audio.addEventListener('ended', () => {
+    btn.textContent = '▶'; btn.classList.remove('playing');
+    prog.style.width = '0%';
+    activeAudio = null;
+  });
+
+  audio.addEventListener('error', () => {
+    btn.textContent = '▶'; btn.disabled = false;
+    btn.classList.remove('playing');
+    appendLog(`Could not load snippet ${index + 1} — WAV file may no longer be cached`, 'error');
+  });
+}
+
+function seekSnippet(event, index) {
+  if (!activeAudio || activeAudio._index !== index) return;
+  const bar = document.getElementById(`rv-wave-${index}`);
+  const pct = event.offsetX / bar.offsetWidth;
+  activeAudio.currentTime = pct * activeAudio.duration;
+}
+
+async function downloadConfirmed() {
+  const confirmed = Object.entries(reviewVerdicts)
+    .filter(([, v]) => v === 'confirmed')
+    .map(([i]) => i)
+    .join(',');
+  if (!confirmed) return;
+  window.open(`${API}/api/jobs/${reviewJobId}/download-confirmed?indices=${confirmed}`, '_blank');
+}
+
+// ── Map tab ───────────────────────────────────────────────────────────────────
+let _map         = null;
+let _mapInited   = false;
+let _markers     = [];
+let _coordFormJob = null;  // job being pinned manually
+
+async function initMap() {
+  // Load Leaflet JS if not already loaded
+  if (!window.L) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js';
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+
+  if (!_mapInited) {
+    _mapInited = true;
+    _map = L.map('map-container', {
+      center: [30, -60],
+      zoom: 3,
+      zoomControl: true,
+    });
+
+    // Dark ocean tile layer
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19,
+    }).addTo(_map);
+  }
+
+  await refreshMapMarkers();
+}
+
+async function refreshMapMarkers() {
+  if (!_map) return;
+
+  // Clear existing markers
+  _markers.forEach(m => m.remove());
+  _markers = [];
+
+  let res;
+  try {
+    res = await fetch(`${API}/api/jobs/map-data`);
+    if (!res.ok) return;
+  } catch { return; }
+
+  const { jobs: mapJobs } = await res.json();
+  if (!mapJobs.length) return;
+
+  const unknownJobs = mapJobs.filter(j => !j.has_coords);
+  const knownJobs   = mapJobs.filter(j => j.has_coords);
+
+  // Group known jobs by station so we show one pin per unique lat/lon
+  const byStation = {};
+  knownJobs.forEach(j => {
+    const key = `${j.lat},${j.lon}`;
+    if (!byStation[key]) byStation[key] = { lat: j.lat, lon: j.lon, name: j.station_name, jobs: [] };
+    byStation[key].jobs.push(j);
+  });
+
+  // Custom sonar-green pin icon
+  const orcaIcon = L.divIcon({
+    html: `<div style="
+      width:14px;height:14px;border-radius:50%;
+      background:#00e5a0;
+      box-shadow:0 0 0 3px rgba(0,229,160,0.25), 0 0 12px rgba(0,229,160,0.5);
+      border:2px solid rgba(0,229,160,0.8);
+    "></div>`,
+    className: '',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [0, -10],
+  });
+
+  const unknownIcon = L.divIcon({
+    html: `<div style="
+      width:14px;height:14px;border-radius:50%;
+      background:#f5a623;
+      box-shadow:0 0 0 3px rgba(245,166,35,0.25), 0 0 12px rgba(245,166,35,0.4);
+      border:2px solid rgba(245,166,35,0.8);
+      cursor:pointer;
+    "></div>`,
+    className: '',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    popupAnchor: [0, -10],
+  });
+
+  // Place known station pins
+  Object.values(byStation).forEach(station => {
+    const totalDetections = station.jobs.reduce((s, j) => s + (j.detection_count || 0), 0);
+    const jobRows = station.jobs.map(j => `
+      <div style="padding:4px 0;border-top:1px solid rgba(255,255,255,0.08);margin-top:4px;">
+        <div style="color:#b8d4f5;font-size:11px;word-break:break-all;">${j.filename}</div>
+        <div style="color:#00e5a0;font-family:monospace;font-size:11px;">${j.detection_count} detection${j.detection_count !== 1 ? 's' : ''}</div>
+      </div>`).join('');
+
+    const popup = L.popup({
+      className: 'orca-popup',
+      maxWidth: 280,
+    }).setContent(`
+      <div style="font-family:'DM Sans',sans-serif;color:#f0f4fa;background:#071428;
+        border-radius:8px;padding:2px;">
+        <div style="font-weight:500;font-size:13px;margin-bottom:4px;">${station.name}</div>
+        <div style="color:#6b8ab5;font-size:11px;margin-bottom:8px;">
+          ${station.lat.toFixed(4)}°, ${station.lon.toFixed(4)}°
+        </div>
+        <div style="font-family:monospace;font-size:12px;color:#00e5a0;margin-bottom:6px;">
+          ${station.jobs.length} job${station.jobs.length !== 1 ? 's' : ''} · ${totalDetections} total detections
+        </div>
+        ${jobRows}
+      </div>
+    `);
+
+    const marker = L.marker([station.lat, station.lon], { icon: orcaIcon })
+      .addTo(_map)
+      .bindPopup(popup);
+    _markers.push(marker);
+  });
+
+  // Place unknown-location pins (amber) near 0,0 with offset
+  unknownJobs.forEach((j, i) => {
+    const marker = L.marker([i * 3, -10], { icon: unknownIcon })
+      .addTo(_map)
+      .bindPopup(`
+        <div style="font-family:'DM Sans',sans-serif;color:#f0f4fa;background:#071428;border-radius:8px;padding:2px;">
+          <div style="font-weight:500;font-size:13px;margin-bottom:4px;">Unknown location</div>
+          <div style="color:#6b8ab5;font-size:11px;margin-bottom:8px;">${j.station_prefix || '—'}</div>
+          <div style="color:#b8d4f5;font-size:11px;margin-bottom:8px;">${j.filename}</div>
+          <button onclick="openCoordForm('${j.station_prefix}', '${j.job_id}')"
+            style="background:#f5a623;color:#040d1a;border:none;border-radius:5px;
+            padding:5px 10px;font-size:11px;font-weight:700;cursor:pointer;width:100%;">
+            📍 Set coordinates
+          </button>
+        </div>
+      `);
+    _markers.push(marker);
+  });
+
+  // Auto-fit bounds if we have known locations
+  if (Object.keys(byStation).length > 0) {
+    const latlngs = Object.values(byStation).map(s => [s.lat, s.lon]);
+    _map.fitBounds(latlngs, { padding: [60, 60], maxZoom: 8 });
+  }
+}
+
+function openCoordForm(prefix, jobId) {
+  _coordFormJob = { prefix, jobId };
+  document.getElementById('coord-form-station').textContent = prefix;
+  document.getElementById('coord-lat').value = '';
+  document.getElementById('coord-lon').value = '';
+  document.getElementById('map-coord-form').style.display = 'block';
+  // Close any open popups
+  if (_map) _map.closePopup();
+}
+
+async function saveStationCoords() {
+  if (!_coordFormJob) return;
+  const lat = parseFloat(document.getElementById('coord-lat').value);
+  const lon = parseFloat(document.getElementById('coord-lon').value);
+
+  if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    alert('Please enter valid coordinates (lat: -90 to 90, lon: -180 to 180)');
+    return;
+  }
+
+  await fetch(`${API}/api/station/coords`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prefix: _coordFormJob.prefix,
+      lat, lon,
+      name: _coordFormJob.prefix,
+    }),
+  });
+
+  document.getElementById('map-coord-form').style.display = 'none';
+  _coordFormJob = null;
+  await refreshMapMarkers();
+}
+</script>
+</body>
+</html>
